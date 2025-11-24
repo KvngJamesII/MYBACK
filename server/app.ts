@@ -27,6 +27,40 @@ declare module 'http' {
     rawBody: unknown
   }
 }
+
+// CORS middleware - MUST be before routes
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  
+  // Allow requests from your Vercel frontend and localhost (for development)
+  const allowedOrigins = [
+    "http://localhost:3000",
+    "http://localhost:5000",
+    "https://localhost:3000",
+    "https://localhost:5000",
+    "https://otpkings.vercel.app",
+  ];
+  
+  if (!origin || allowedOrigins.includes(origin) || origin?.includes("vercel.app")) {
+    res.header("Access-Control-Allow-Origin", origin || "*");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS"
+    );
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type,Authorization"
+    );
+  }
+  
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
+
 app.use(express.json({
   verify: (req, _res, buf) => {
     req.rawBody = buf;
