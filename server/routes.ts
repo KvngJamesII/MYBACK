@@ -1,8 +1,10 @@
+
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import bcrypt from "bcrypt";
 import session from "express-session";
+import PgSession from "connect-pg-simple";
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import rateLimit from "express-rate-limit";
@@ -11,7 +13,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { loginSchema, signupSchema } from "@shared/schema";
 import type { User, Country } from "@shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { sql } from "drizzle-orm";
 
 // Extend Express Request to include user
@@ -68,9 +70,14 @@ const smsLimiter = rateLimit({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Session configuration
+  // Session configuration - Use PostgreSQL for production
+  const SessionStore = PgSession(session);
   app.use(
     session({
+      store: new SessionStore({
+        pool,
+        tableName: "session",
+      }),
       secret: process.env.SESSION_SECRET || "otp-king-secret-key-change-in-production",
       resave: false,
       saveUninitialized: false,
@@ -223,7 +230,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Check for daily login reward
         const now = new Date();
         const lastLogin = user.lastLoginDate ? new Date(user.lastLoginDate) : null;
-        
+
         const shouldReward = !lastLogin || 
           (now.getTime() - lastLogin.getTime()) > 24 * 60 * 60 * 1000;
 
@@ -308,7 +315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Parse numbers from file
       const numbers = country.numbersFile.split('\n').filter(n => n.trim());
-      
+
       if (numbers.length === 0) {
         return res.status(400).json({ message: "No numbers available" });
       }
@@ -359,7 +366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Call external SMS API twice as specified
       let newMessages = 0;
-      
+
       for (let i = 0; i < 2; i++) {
         const response = await axios.get("http://51.77.216.195/crapi/dgroup/viewstats", {
           params: {
@@ -428,7 +435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/history", requireAuth, async (req: Request, res: Response) => {
     try {
       const history = await storage.getUserHistory(req.user!.id);
-      
+
       // Enrich with country data
       const enriched = await Promise.all(
         history.map(async (item) => {
@@ -494,7 +501,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const users = await storage.getAllUsers();
       const countries = await storage.getCountries();
-      
+
       const totalNumbersUsed = countries.reduce((sum, c) => sum + (c.usedNumbers || 0), 0);
       const smsCount = await db.query.smsMessages.findMany();
 
@@ -505,7 +512,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const countryUsage = await db.query.numberHistory.findMany();
       const countryUsageMap = new Map<string, number>();
-      
+
       for (const usage of countryUsage) {
         countryUsageMap.set(usage.countryId, (countryUsageMap.get(usage.countryId) || 0) + 1);
       }
@@ -557,10 +564,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/countries", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { name, code, flagUrl, numbersFile } = req.body;
-      
+
       // Count numbers
       const numbers = numbersFile.split('\n').filter((n: string) => n.trim());
-      
+
       const country = await storage.createCountry({
         name,
         code,
@@ -611,7 +618,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/users", requireAdmin, async (req: Request, res: Response) => {
     try {
       const users = await storage.getAllUsers();
-      
+
       // Enrich with usage stats
       const enriched = await Promise.all(
         users.map(async (user) => {
@@ -738,7 +745,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { credits: 500, naira: 450 },
         { credits: 1000, naira: 800 },
       ];
-      
+
       if (pricingTiers) {
         try {
           tiers = JSON.parse(pricingTiers.value);
@@ -746,7 +753,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Fall back to default if parsing fails
         }
       }
-      
+
       res.json({ pricingTiers: tiers });
     } catch (error: any) {
       res.json({ 
@@ -771,7 +778,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (response.data.status && response.data.data.status === "success") {
         const amount = Math.floor(response.data.data.amount / 100); // Convert from kobo
-        
+
         // Get pricing tiers
         const pricingTiers = await storage.getSetting("pricing_tiers");
         let tiers = [
@@ -779,7 +786,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           { credits: 500, naira: 450 },
           { credits: 1000, naira: 800 },
         ];
-        
+
         if (pricingTiers) {
           try {
             tiers = JSON.parse(pricingTiers.value);
@@ -787,7 +794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Fall back to default
           }
         }
-        
+
         // Find matching tier or calculate by rate
         let credits = 0;
         for (const tier of tiers) {
@@ -796,7 +803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
           }
         }
-        
+
         // If no exact match, calculate by best rate
         if (credits === 0) {
           const bestRate = Math.min(...tiers.map(t => t.naira / t.credits));
@@ -852,7 +859,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { credits: 500, naira: 450 },
         { credits: 1000, naira: 800 },
       ];
-      
+
       if (pricingTiers) {
         try {
           tiers = JSON.parse(pricingTiers.value);
@@ -860,7 +867,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Fall back to default
         }
       }
-      
+
       res.json({
         ...stats,
         pricingTiers: tiers,
@@ -873,18 +880,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/wallet/pricing", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { pricingTiers } = req.body;
-      
+
       // Validate tiers
       if (!Array.isArray(pricingTiers) || pricingTiers.length === 0) {
         return res.status(400).json({ message: "At least one pricing tier is required" });
       }
-      
+
       for (const tier of pricingTiers) {
         if (!tier.credits || !tier.naira || tier.credits <= 0 || tier.naira <= 0) {
           return res.status(400).json({ message: "All tiers must have valid credits and naira values" });
         }
       }
-      
+
       await storage.setSetting({ 
         key: "pricing_tiers", 
         value: JSON.stringify(pricingTiers.map(t => ({
